@@ -36,13 +36,64 @@ jobs:
           test -n "$ZOTERO_API_KEY" || (echo "Missing required secret: ZOTERO_API_KEY" && exit 1)
           test -n "$SLACK_WEBHOOK" || (echo "Missing required secret: SLACK_WEBHOOK" && exit 1)
 
-      - name: Run script
+      - name: Inspect script and Zotero items
         env:
           GROUP_ID: ${{ secrets.GROUP_ID }}
           COLLECTION_KEY: ${{ secrets.COLLECTION_KEY }}
           ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-        run: python zotero_alert.py
+        run: |
+          echo "=== Script location ==="
+          pwd
+          ls -l zotero_alert.py
+
+          echo ""
+          echo "=== Script beginning ==="
+          head -30 zotero_alert.py
+
+          echo ""
+          echo "=== Zotero items ==="
+
+          python - <<'PY'
+          import os
+          import requests
+
+          group_id = os.environ["GROUP_ID"]
+          collection_key = os.environ["COLLECTION_KEY"]
+          api_key = os.environ["ZOTERO_API_KEY"]
+
+          url = (
+              f"https://api.zotero.org/groups/{group_id}/items"
+              f"?sort=dateAdded&direction=desc&limit=100"
+          )
+
+          response = requests.get(
+              url,
+              headers={"Zotero-API-Key": api_key},
+              timeout=30
+          )
+
+          print("HTTP status:", response.status_code)
+          response.raise_for_status()
+
+          items = response.json()
+
+          print("Items returned:", len(items))
+          print("Target collection:", collection_key)
+          print("")
+
+          for item in items[:20]:
+              data = item.get("data", {})
+
+              print(
+                  item.get("key"),
+                  "|",
+                  data.get("dateAdded"),
+                  "|",
+                  data.get("title"),
+                  "| collections:",
+                  data.get("collections")
+              )
+          PY
 
       - name: Commit updated state
         run: |
