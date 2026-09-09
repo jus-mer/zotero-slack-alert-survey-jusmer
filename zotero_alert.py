@@ -2,10 +2,15 @@ import os
 import requests
 
 
-def normalize_collection_key(raw_value):
+def normalize_collection_target(raw_value):
     value = (raw_value or "").strip()
     if not value:
-        return ""
+        return "", ""
+
+    group_id_from_url = ""
+    if "/groups/" in value:
+        group_part = value.split("/groups/", 1)[1]
+        group_id_from_url = group_part.split("/", 1)[0].strip()
 
     # Accept either a raw key or a full Zotero URL containing /collections/<KEY>/
     if "/collections/" in value:
@@ -13,7 +18,7 @@ def normalize_collection_key(raw_value):
         value = value.split("/", 1)[0]
 
     value = value.split("?", 1)[0].split("#", 1)[0].strip()
-    return value
+    return value, group_id_from_url
 
 
 GROUP_ID = os.environ["GROUP_ID"]
@@ -23,7 +28,8 @@ COLLECTION_KEY_RAW = (
     or os.getenv("COLLECTION_ID")
     or ""
 ).strip()
-COLLECTION_KEY = normalize_collection_key(COLLECTION_KEY_RAW)
+COLLECTION_KEY, GROUP_ID_FROM_COLLECTION_URL = normalize_collection_target(COLLECTION_KEY_RAW)
+ACTIVE_GROUP_ID = GROUP_ID_FROM_COLLECTION_URL or GROUP_ID
 ZOTERO_API_KEY = os.environ["ZOTERO_API_KEY"]
 SLACK_WEBHOOK = os.environ["SLACK_WEBHOOK"]
 INCLUDE_SUBCOLLECTIONS = os.getenv("INCLUDE_SUBCOLLECTIONS", "true").strip().lower() in {
@@ -66,7 +72,7 @@ def format_authors(creators):
 
 
 def has_pdf(item_key):
-    url = f"https://api.zotero.org/groups/{GROUP_ID}/items/{item_key}/children"
+    url = f"https://api.zotero.org/groups/{ACTIVE_GROUP_ID}/items/{item_key}/children"
 
     r = requests.get(
         url,
@@ -120,7 +126,7 @@ def fetch_collection_keys(root_collection_key):
         if not INCLUDE_SUBCOLLECTIONS:
             continue
 
-        url = f"https://api.zotero.org/groups/{GROUP_ID}/collections/{current}/collections"
+        url = f"https://api.zotero.org/groups/{ACTIVE_GROUP_ID}/collections/{current}/collections"
         r = requests.get(url, headers=headers, params={"limit": 100, "format": "json"}, timeout=30)
         if not r.ok:
             if current == root_collection_key:
@@ -148,7 +154,7 @@ def fetch_recent_items():
     }
 
     if not COLLECTION_KEY:
-        url = f"https://api.zotero.org/groups/{GROUP_ID}/items/top"
+        url = f"https://api.zotero.org/groups/{ACTIVE_GROUP_ID}/items/top"
         r = requests.get(url, headers=headers, params=params, timeout=30)
         r.raise_for_status()
         return r.json()
@@ -161,7 +167,7 @@ def fetch_recent_items():
 
     all_items = []
     for collection_key in collection_keys:
-        url = f"https://api.zotero.org/groups/{GROUP_ID}/collections/{collection_key}/items/top"
+        url = f"https://api.zotero.org/groups/{ACTIVE_GROUP_ID}/collections/{collection_key}/items/top"
         r = requests.get(url, headers=headers, params=params, timeout=30)
         if not r.ok:
             if collection_key == COLLECTION_KEY:
@@ -191,6 +197,15 @@ def main():
 
     if COLLECTION_KEY_RAW and COLLECTION_KEY_RAW != COLLECTION_KEY:
         print("Normalized COLLECTION_KEY from URL/extended value.")
+
+    if GROUP_ID_FROM_COLLECTION_URL:
+        if GROUP_ID_FROM_COLLECTION_URL != GROUP_ID:
+            print(
+                "GROUP_ID mismatch detected. "
+                f"Using group ID from COLLECTION_KEY URL: {GROUP_ID_FROM_COLLECTION_URL}"
+            )
+        else:
+            print("GROUP_ID confirmed from COLLECTION_KEY URL.")
 
     if COLLECTION_KEY:
         mode = "including subcollections" if INCLUDE_SUBCOLLECTIONS else "without subcollections"
@@ -257,7 +272,7 @@ def main():
 
         zotero_link = (
             f"https://www.zotero.org/groups/"
-            f"{GROUP_ID}/items/{item_key}"
+            f"{ACTIVE_GROUP_ID}/items/{item_key}"
         )
 
         pdf_status = "Yes" if has_pdf(item_key) else "No"
