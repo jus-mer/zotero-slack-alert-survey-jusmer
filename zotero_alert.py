@@ -1,394 +1,187 @@
 import os
+import sys
+
 import requests
-from datetime import datetime, timezone
-
-
-# ============================================================
-# Configuration
-# ============================================================
 
 GROUP_ID = os.environ["GROUP_ID"]
 ZOTERO_API_KEY = os.environ["ZOTERO_API_KEY"]
 SLACK_WEBHOOK = os.environ["SLACK_WEBHOOK"]
-COLLECTION_KEY = os.environ.get("COLLECTION_KEY", "").strip()
+COLLECTION_KEY = os.environ["COLLECTION_KEY"]
 
-if COLLECTION_KEY:
-    LAST_ITEM_FILE = f"last_item_{COLLECTION_KEY}.txt"
-else:
-    LAST_ITEM_FILE = "last_item_group.txt"
-
-ZOTERO_HEADERS = {
-    "Zotero-API-Key": ZOTERO_API_KEY
-}
+LAST_ITEM_FILE = "last_item.txt"
+headers = {"Zotero-API-Key": ZOTERO_API_KEY}
 
 
-# ============================================================
-# State management
-# ============================================================
+def print_zotero_403_help():
+    print("Zotero API returned 403 Forbidden.")
+    print("This usually means the API key cannot access this group library.")
+    print("Checklist:")
+    print("- GROUP_ID is correct for the target Zotero group.")
+    print("- ZOTERO_API_KEY is valid and active.")
+    print("- The key has 'Read access to groups' enabled.")
+    print("- The key has 'Read access to items' enabled.")
+    print("- The key owner has membership/access to that Zotero group.")
+
 
 def get_last_saved():
-    """Return the last processed dateAdded timestamp."""
-
-    if not os.path.exists(LAST_ITEM_FILE):
-        return None
-
-    with open(LAST_ITEM_FILE, "r", encoding="utf-8") as f:
-        value = f.read().strip()
-
-    return value or None
+    try:
+        with open(LAST_ITEM_FILE, "r") as f:
+            return f.read().strip()
+    except:
+        return "none"
 
 
-def save_last_saved(date_added):
-    """Save the latest processed dateAdded timestamp."""
+def save_last(key):
+    with open(LAST_ITEM_FILE, "w") as f:
+        f.write(key)
 
-    with open(LAST_ITEM_FILE, "w", encoding="utf-8") as f:
-        f.write(date_added)
-
-
-def parse_date(date_string):
-    """Convert a Zotero timestamp into a datetime."""
-
-    if not date_string:
-        return None
-
-    return datetime.fromisoformat(
-        date_string.replace("Z", "+00:00")
-    )
-
-
-# ============================================================
-# Zotero
-# ============================================================
-
-def get_items():
-
-    url = (
-        f"https://api.zotero.org/groups/"
-        f"{GROUP_ID}/items"
-        f"?sort=dateAdded&direction=desc&limit=100"
-    )
-
-    if COLLECTION_KEY:
-        print(f"Monitoring Zotero collection: {COLLECTION_KEY}")
-        print(f"Collection key repr: {COLLECTION_KEY!r}")
-    else:
-        print(f"Monitoring entire Zotero group: {GROUP_ID}")
-
-    response = requests.get(
-        url,
-        headers=ZOTERO_HEADERS,
-        timeout=30
-    )
-
-    response.raise_for_status()
-
-    items = response.json()
-
-    print(f"Zotero returned {len(items)} items.")
-
-    # --------------------------------------------------------
-    # Filter by collection
-    # --------------------------------------------------------
-
-    if COLLECTION_KEY:
-
-        filtered_items = []
-
-        for item in items:
-
-            data = item.get("data", {})
-            collections = data.get("collections")
-
-            if collections is None:
-                collections = []
-
-            # Make sure we are comparing strings.
-            collections = [str(x).strip() for x in collections]
-
-            if COLLECTION_KEY in collections:
-                filtered_items.append(item)
-
-        print(
-            f"Found {len(filtered_items)} items in collection "
-            f"{COLLECTION_KEY}."
-        )
-
-        # Diagnostic information for the first few matching items
-        if filtered_items:
-            print("Matching items:")
-
-            for item in filtered_items[:10]:
-                data = item.get("data", {})
-
-                print(
-                    f"  {item.get('key')} | "
-                    f"{data.get('dateAdded')} | "
-                    f"{data.get('title')}"
-                )
-
-        return filtered_items
-
-    return items
-
-
-# ============================================================
-# Helpers
-# ============================================================
 
 def format_authors(creators):
-
     authors = []
-
-    for creator in creators:
-
-        if creator.get("creatorType") != "author":
-            continue
-
-        if creator.get("name"):
-            authors.append(creator["name"])
-        else:
-            first = creator.get("firstName", "").strip()
-            last = creator.get("lastName", "").strip()
-
-            if first and last:
-                authors.append(f"{first} {last}")
-            elif last:
-                authors.append(last)
-            elif first:
-                authors.append(first)
-
-    return ", ".join(authors) if authors else "Unknown author"
+    for c in creators:
+        if c.get("creatorType") == "author":
+            first = c.get("firstName", "")
+            last = c.get("lastName", "")
+            authors.append(f"{first} {last}".strip())
+    return ", ".join(authors) if authors else "Unknown authors"
 
 
 def has_pdf(item_key):
+    url = f"https://api.zotero.org/groups/{GROUP_ID}/items/{item_key}/children"
+    r = requests.get(url, headers=headers, timeout=30)
+    if not r.ok:
+        return False
 
-    url = (
-        f"https://api.zotero.org/groups/"
-        f"{GROUP_ID}/items/{item_key}/children"
-    )
-
-    response = requests.get(
-        url,
-        headers=ZOTERO_HEADERS,
-        timeout=30
-    )
-
-    response.raise_for_status()
-
-    for child in response.json():
-
+    children = r.json()
+    for child in children:
         data = child.get("data", {})
-
-        if (
-            data.get("itemType") == "attachment"
-            and data.get("contentType") == "application/pdf"
-        ):
-            return True
-
+        if data.get("itemType") == "attachment":
+            if data.get("contentType") == "application/pdf":
+                return True
     return False
 
 
-# ============================================================
-# Slack
-# ============================================================
+def get_creator_name(meta):
+    created_by = meta.get("createdByUser") or {}
 
-def post_to_slack(item):
+    if created_by.get("name"):
+        return created_by["name"]
+    if created_by.get("username"):
+        return created_by["username"]
+    if created_by.get("id"):
+        return f"User ID {created_by['id']}"
 
-    data = item.get("data", {})
-    meta = item.get("meta", {})
+    return "Not available (hidden or missing in API response)"
 
-    item_key = item.get("key")
-
-    title = data.get("title") or "Untitled"
-
-    authors = format_authors(
-        data.get("creators", [])
-    )
-
-    doi = data.get("DOI")
-    date_added = data.get("dateAdded")
-
-    zotero_link = (
-        f"https://www.zotero.org/groups/"
-        f"{GROUP_ID}/items/{item_key}"
-    )
-
-    created_by = meta.get("createdByUser")
-
-    if created_by:
-        added_by = (
-            created_by.get("name")
-            or created_by.get("username")
-            or "Unknown"
-        )
-    else:
-        added_by = "Unknown"
-
-    pdf = has_pdf(item_key)
-
-    abstract = data.get("abstractNote", "").strip()
-
-    message = (
-        f"📚 *New Zotero item*\n\n"
-        f"*{title}*\n\n"
-        f"*Authors:* {authors}\n"
-        f"*Added by:* {added_by}\n"
-    )
-
-    if date_added:
-        message += f"*Date added:* {date_added}\n"
-
-    if doi:
-        message += f"*DOI:* {doi}\n"
-
-    message += (
-        f"*PDF:* {'Yes' if pdf else 'No'}\n"
-    )
-
-    if abstract:
-
-        max_length = 1500
-
-        if len(abstract) > max_length:
-            abstract = (
-                abstract[:max_length].rstrip()
-                + "..."
-            )
-
-        message += (
-            f"\n*Abstract:*\n{abstract}\n"
-        )
-
-    message += (
-        f"\n<{zotero_link}|Open in Zotero>"
-    )
-
-    response = requests.post(
-        SLACK_WEBHOOK,
-        json={"text": message},
-        timeout=30
-    )
-
-    response.raise_for_status()
-
-    print(
-        f"Slack notification sent for item {item_key}"
-    )
-
-
-# ============================================================
-# Main
-# ============================================================
 
 def main():
+    last_seen = get_last_saved()
 
-    items = get_items()
+    url = f"https://api.zotero.org/groups/{GROUP_ID}/items/top"
+    params = {
+        "sort": "dateAdded",
+        "direction": "desc",
+        "limit": 100,
+        "include": "data",
+    }
+
+    r = requests.get(url, headers=headers, params=params, timeout=30)
+
+    try:
+        r.raise_for_status()
+    except requests.HTTPError:
+        print(f"Zotero API request failed: {r.status_code}")
+        if r.text:
+            print(r.text[:500])
+        if r.status_code == 403:
+            print_zotero_403_help()
+            raise SystemExit(1)
+        raise
+
+    items = r.json()
+
+    # Only keep items belonging to the requested collection.
+    items = [
+        item for item in items
+        if COLLECTION_KEY in item.get("data", {}).get("collections", [])
+    ]
+
+    print(f"Monitoring collection: {COLLECTION_KEY}")
+    print(f"Items found in collection: {len(items)}")
 
     if not items:
-        print("No Zotero items found.")
+        print("No items found.")
         return
-
-    # Sort newest first
-    items.sort(
-        key=lambda item: (
-            parse_date(
-                item.get("data", {}).get("dateAdded")
-            )
-            or datetime.min.replace(tzinfo=timezone.utc)
-        ),
-        reverse=True
-    )
-
-    newest_item = items[0]
-
-    newest_date = newest_item.get("data", {}).get("dateAdded")
-
-    print(
-        f"Newest item in monitored collection: "
-        f"{newest_item.get('key')} | "
-        f"{newest_date} | "
-        f"{newest_item.get('data', {}).get('title')}"
-    )
-
-    last_saved = get_last_saved()
-
-    # --------------------------------------------------------
-    # First run
-    # --------------------------------------------------------
-
-    if last_saved is None:
-
-        print("No previous state found.")
-
-        if newest_date:
-            save_last_saved(newest_date)
-
-            print(
-                f"Initialized state with {newest_date}."
-            )
-
-        return
-
-    print(f"Last saved date: {last_saved}")
-
-    last_date = parse_date(last_saved)
-
-    # --------------------------------------------------------
-    # Find new items
-    # --------------------------------------------------------
 
     new_items = []
-
     for item in items:
-
-        date_added = item.get("data", {}).get("dateAdded")
-
-        item_date = parse_date(date_added)
-
-        if item_date and item_date > last_date:
-            new_items.append(item)
+        if item["key"] == last_seen:
+            break
+        new_items.append(item)
 
     if not new_items:
-
-        print("No new Zotero items.")
+        print("No new items.")
         return
 
-    print(
-        f"Found {len(new_items)} new Zotero item(s)."
-    )
+    # Reverse so oldest new item posts first
+    new_items.reverse()
 
-    # --------------------------------------------------------
-    # Send oldest -> newest
-    # --------------------------------------------------------
+    for item in new_items:
+        item_key = item["key"]
+        data = item["data"]
+        meta = item.get("meta", {})
 
-    for item in reversed(new_items):
+        title = data.get("title", "No title")
+        abstract = data.get("abstractNote", "").strip()
+        creators = data.get("creators", [])
+        doi = data.get("DOI", "").strip()
 
-        item_type = item.get("data", {}).get("itemType")
+        authors = format_authors(creators)
 
-        if item_type == "attachment":
-            print(
-                f"Skipping attachment {item.get('key')}"
-            )
-            continue
+        creator_name = get_creator_name(meta)
 
-        post_to_slack(item)
+        zotero_link = f"https://www.zotero.org/groups/{GROUP_ID}/items/{item_key}"
 
-    # --------------------------------------------------------
-    # Save newest timestamp
-    # --------------------------------------------------------
+        pdf_status = "Yes" if has_pdf(item_key) else "No"
 
-    if newest_date:
+        if not abstract:
+            abstract = "_No abstract available._"
 
-        save_last_saved(newest_date)
+        if doi:
+            doi_link = f"https://doi.org/{doi}"
+            doi_text = f"<{doi_link}|{doi}>"
+        else:
+            doi_text = "Not available"
 
-        print(
-            f"Saved latest dateAdded: {newest_date}"
+        message = {
+            "text": f"📚 *New Zotero item added*\n"
+                    f"*Title:* {title}\n"
+                    f"*Authors:* {authors}\n"
+                    f"*Added by:* {creator_name}\n"
+                    f"*DOI:* {doi_text}\n"
+                    f"*PDF attached:* {pdf_status}\n\n"
+                    f"*Abstract:*\n{abstract[:1500]}\n\n"
+                    f"<{zotero_link}|Open in Zotero>"
+        }
+
+        slack_resp = requests.post(
+            SLACK_WEBHOOK,
+            json=message,
+            timeout=15
         )
 
+        if not slack_resp.ok:
+            print(
+                f"Slack webhook failed "
+                f"({slack_resp.status_code}): "
+                f"{slack_resp.text[:300]}"
+            )
 
-# ============================================================
-# Entry point
-# ============================================================
+        print(f"Posted: {title}")
+
+    # Save newest collection item
+    save_last(items[0]["key"])
+
 
 if __name__ == "__main__":
     main()
