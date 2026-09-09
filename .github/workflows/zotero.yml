@@ -35,14 +35,35 @@ jobs:
           test -n "$COLLECTION_KEY" || (echo "Missing required secret: COLLECTION_KEY" && exit 1)
           test -n "$ZOTERO_API_KEY" || (echo "Missing required secret: ZOTERO_API_KEY" && exit 1)
           test -n "$SLACK_WEBHOOK" || (echo "Missing required secret: SLACK_WEBHOOK" && exit 1)
-
-      - name: Run script
+      
+      - name: Test Zotero collection
         env:
           GROUP_ID: ${{ secrets.GROUP_ID }}
           COLLECTION_KEY: ${{ secrets.COLLECTION_KEY }}
           ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-        run: python zotero_alert.py
+        run: |
+          echo "GROUP_ID length: ${#GROUP_ID}"
+          echo "COLLECTION_KEY length: ${#COLLECTION_KEY}"
+      
+          echo "Testing group..."
+          curl -s -o /tmp/group.json -w "Group HTTP status: %{http_code}\n" \
+            -H "Zotero-API-Key: $ZOTERO_API_KEY" \
+            "https://api.zotero.org/groups/$GROUP_ID/items?limit=1"
+      
+          echo "Testing collection..."
+          curl -s -o /tmp/collection.json -w "Collection HTTP status: %{http_code}\n" \
+            -H "Zotero-API-Key: $ZOTERO_API_KEY" \
+            "https://api.zotero.org/groups/$GROUP_ID/collections/$COLLECTION_KEY/items?limit=1"
+      
+          echo "Collection response:"
+          head -c 500 /tmp/collection.json
+            - name: Run script
+              env:
+                GROUP_ID: ${{ secrets.GROUP_ID }}
+                COLLECTION_KEY: ${{ secrets.COLLECTION_KEY }}
+                ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
+                SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+              run: python zotero_alert.py
 
       - name: Commit updated state
         run: |
