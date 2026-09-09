@@ -1,33 +1,50 @@
-name: Zotero Slack Alert
+name: Zotero Collection Diagnostic
 
 on:
   workflow_dispatch:
 
 jobs:
-  check-zotero:
+  test:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Test Zotero collection
+      - name: Test collection lookup
         env:
           GROUP_ID: ${{ secrets.GROUP_ID }}
           COLLECTION_KEY: ${{ secrets.COLLECTION_KEY }}
           ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
         run: |
-          echo "Testing collection:"
-          echo "Group ID length: ${#GROUP_ID}"
-          echo "Collection key length: ${#COLLECTION_KEY}"
+          echo "=== Direct collection endpoint ==="
 
-          echo ""
-          echo "=== Collection information ==="
-
-          curl -i \
+          curl -s -i \
             -H "Zotero-API-Key: $ZOTERO_API_KEY" \
             "https://api.zotero.org/groups/$GROUP_ID/collections/$COLLECTION_KEY"
 
           echo ""
-          echo "=== Collection items ==="
+          echo "=== Collection list filtered by key ==="
 
-          curl -i \
+          curl -s -i \
             -H "Zotero-API-Key: $ZOTERO_API_KEY" \
-            "https://api.zotero.org/groups/$GROUP_ID/collections/$COLLECTION_KEY/items?limit=20"
+            "https://api.zotero.org/groups/$GROUP_ID/collections?collectionKey=$COLLECTION_KEY"
+
+          echo ""
+          echo "=== All collections, looking for target ==="
+
+          curl -s \
+            -H "Zotero-API-Key: $ZOTERO_API_KEY" \
+            "https://api.zotero.org/groups/$GROUP_ID/collections?limit=100" \
+            > /tmp/collections.json
+
+          python - <<'PY'
+          import json
+
+          with open("/tmp/collections.json") as f:
+              collections = json.load(f)
+
+          target = "25QRNU6T"
+
+          for collection in collections:
+              if collection["key"] == target:
+                  print("FOUND TARGET:")
+                  print(json.dumps(collection, indent=2))
+          PY
