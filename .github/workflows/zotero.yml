@@ -1,50 +1,53 @@
-name: Zotero Collection Diagnostic
+name: Zotero Slack Alert
 
 on:
+  schedule:
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
-  test:
+  check-zotero:
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: write
+
     steps:
-      - name: Test collection lookup
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install requests
+        run: pip install requests
+
+      - name: Validate required secrets
         env:
           GROUP_ID: ${{ secrets.GROUP_ID }}
           COLLECTION_KEY: ${{ secrets.COLLECTION_KEY }}
           ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
         run: |
-          echo "=== Direct collection endpoint ==="
+          test -n "$GROUP_ID" || (echo "Missing required secret: GROUP_ID" && exit 1)
+          test -n "$COLLECTION_KEY" || (echo "Missing required secret: COLLECTION_KEY" && exit 1)
+          test -n "$ZOTERO_API_KEY" || (echo "Missing required secret: ZOTERO_API_KEY" && exit 1)
+          test -n "$SLACK_WEBHOOK" || (echo "Missing required secret: SLACK_WEBHOOK" && exit 1)
 
-          curl -s -i \
-            -H "Zotero-API-Key: $ZOTERO_API_KEY" \
-            "https://api.zotero.org/groups/$GROUP_ID/collections/$COLLECTION_KEY"
+      - name: Run script
+        env:
+          GROUP_ID: ${{ secrets.GROUP_ID }}
+          COLLECTION_KEY: ${{ secrets.COLLECTION_KEY }}
+          ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+        run: python zotero_alert.py
 
-          echo ""
-          echo "=== Collection list filtered by key ==="
-
-          curl -s -i \
-            -H "Zotero-API-Key: $ZOTERO_API_KEY" \
-            "https://api.zotero.org/groups/$GROUP_ID/collections?collectionKey=$COLLECTION_KEY"
-
-          echo ""
-          echo "=== All collections, looking for target ==="
-
-          curl -s \
-            -H "Zotero-API-Key: $ZOTERO_API_KEY" \
-            "https://api.zotero.org/groups/$GROUP_ID/collections?limit=100" \
-            > /tmp/collections.json
-
-          python - <<'PY'
-          import json
-
-          with open("/tmp/collections.json") as f:
-              collections = json.load(f)
-
-          target = "25QRNU6T"
-
-          for collection in collections:
-              if collection["key"] == target:
-                  print("FOUND TARGET:")
-                  print(json.dumps(collection, indent=2))
-          PY
+      - name: Commit updated state
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add last_item*.txt
+          git commit -m "Update Zotero state" || echo "No changes"
+          git push
