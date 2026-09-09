@@ -1,13 +1,29 @@
 import os
 import requests
 
+
+def normalize_collection_key(raw_value):
+    value = (raw_value or "").strip()
+    if not value:
+        return ""
+
+    # Accept either a raw key or a full Zotero URL containing /collections/<KEY>/
+    if "/collections/" in value:
+        value = value.split("/collections/", 1)[1]
+        value = value.split("/", 1)[0]
+
+    value = value.split("?", 1)[0].split("#", 1)[0].strip()
+    return value
+
+
 GROUP_ID = os.environ["GROUP_ID"]
-COLLECTION_KEY = (
+COLLECTION_KEY_RAW = (
     os.getenv("COLLECTION_KEY")
     or os.getenv("SUBCOLLECTION_KEY")
     or os.getenv("COLLECTION_ID")
     or ""
 ).strip()
+COLLECTION_KEY = normalize_collection_key(COLLECTION_KEY_RAW)
 ZOTERO_API_KEY = os.environ["ZOTERO_API_KEY"]
 SLACK_WEBHOOK = os.environ["SLACK_WEBHOOK"]
 INCLUDE_SUBCOLLECTIONS = os.getenv("INCLUDE_SUBCOLLECTIONS", "true").strip().lower() in {
@@ -172,6 +188,9 @@ def main():
 
     last_seen = get_last_saved()
     print(f"last_item marker: {last_seen}")
+
+    if COLLECTION_KEY_RAW and COLLECTION_KEY_RAW != COLLECTION_KEY:
+        print("Normalized COLLECTION_KEY from URL/extended value.")
 
     if COLLECTION_KEY:
         mode = "including subcollections" if INCLUDE_SUBCOLLECTIONS else "without subcollections"
