@@ -107,6 +107,11 @@ def fetch_collection_keys(root_collection_key):
         url = f"https://api.zotero.org/groups/{GROUP_ID}/collections/{current}/collections"
         r = requests.get(url, headers=headers, params={"limit": 100, "format": "json"}, timeout=30)
         if not r.ok:
+            if current == root_collection_key:
+                raise RuntimeError(
+                    f"Cannot access collection '{root_collection_key}' (HTTP {r.status_code}). "
+                    "Check COLLECTION_KEY and Zotero API permissions."
+                )
             print(f"Warning: failed to list child collections for {current} ({r.status_code}).")
             continue
 
@@ -134,13 +139,20 @@ def fetch_recent_items():
 
     collection_keys = fetch_collection_keys(COLLECTION_KEY)
     if not collection_keys:
-        return []
+        raise RuntimeError("No collection keys resolved from COLLECTION_KEY.")
+
+    print(f"Resolved collections: {len(collection_keys)}")
 
     all_items = []
     for collection_key in collection_keys:
         url = f"https://api.zotero.org/groups/{GROUP_ID}/collections/{collection_key}/items/top"
         r = requests.get(url, headers=headers, params=params, timeout=30)
         if not r.ok:
+            if collection_key == COLLECTION_KEY:
+                raise RuntimeError(
+                    f"Cannot read items for COLLECTION_KEY '{COLLECTION_KEY}' (HTTP {r.status_code}). "
+                    "Check key value and permissions."
+                )
             print(f"Warning: failed to read collection {collection_key} ({r.status_code}).")
             continue
         all_items.extend(r.json())
@@ -159,6 +171,7 @@ def fetch_recent_items():
 def main():
 
     last_seen = get_last_saved()
+    print(f"last_item marker: {last_seen}")
 
     if COLLECTION_KEY:
         mode = "including subcollections" if INCLUDE_SUBCOLLECTIONS else "without subcollections"
@@ -166,7 +179,12 @@ def main():
     else:
         print("Group-wide mode enabled (all top-level items in the group library).")
 
-    items = fetch_recent_items()
+    try:
+        items = fetch_recent_items()
+    except RuntimeError as err:
+        print(str(err))
+        raise SystemExit(1)
+
     print("Items found in query:", len(items))
 
     if not items:
@@ -186,8 +204,13 @@ def main():
         print("No new items.")
         return
 
+    print("New items to notify:", len(new_items))
+
     # Oldest first
     new_items.reverse()
+
+    posted_count = 0
+    failed_count = 0
 
     for item in new_items:
 
@@ -249,13 +272,26 @@ def main():
         )
 
         if not slack_resp.ok:
+            failed_count += 1
             print(
                 f"Slack webhook failed "
                 f"({slack_resp.status_code}): "
                 f"{slack_resp.text[:300]}"
             )
+            continue
 
         print(f"Posted: {title}")
+        posted_count += 1
+
+    print(f"Slack delivery summary: posted={posted_count}, failed={failed_count}")
+
+    if failed_count > 0:
+        print("At least one Slack delivery failed. Keeping last_item unchanged so items can be retried.")
+        raise SystemExit(1)
+
+    if posted_count == 0:
+        print("No Slack messages were delivered. Keeping last_item unchanged.")
+        raise SystemExit(1)
 
     # Save newest monitored item
     save_last(items[0]["key"])
