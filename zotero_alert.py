@@ -133,11 +133,10 @@ def get_items():
     """
 
     if COLLECTION_KEY:
-
         url = (
             f"https://api.zotero.org/groups/"
             f"{GROUP_ID}/collections/"
-            f"{COLLECTION_KEY}/items/top"
+            f"{COLLECTION_KEY}/items"
             f"?sort=dateAdded&direction=desc&limit=20"
         )
 
