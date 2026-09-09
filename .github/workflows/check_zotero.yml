@@ -1,0 +1,21 @@
+- name: Test Zotero configuration
+  env:
+    GROUP_ID: ${{ secrets.GROUP_ID }}
+    COLLECTION_KEY: ${{ secrets.COLLECTION_KEY }}
+    ZOTERO_API_KEY: ${{ secrets.ZOTERO_API_KEY }}
+  run: |
+    echo "GROUP_ID length: ${#GROUP_ID}"
+    echo "COLLECTION_KEY length: ${#COLLECTION_KEY}"
+
+    echo "Testing group..."
+    curl -s -o /tmp/group.json -w "Group HTTP status: %{http_code}\n" \
+      -H "Zotero-API-Key: $ZOTERO_API_KEY" \
+      "https://api.zotero.org/groups/$GROUP_ID/items?limit=1"
+
+    echo "Testing collection..."
+    curl -s -o /tmp/collection.json -w "Collection HTTP status: %{http_code}\n" \
+      -H "Zotero-API-Key: $ZOTERO_API_KEY" \
+      "https://api.zotero.org/groups/$GROUP_ID/collections/$COLLECTION_KEY/items?limit=1"
+
+    echo "Collection response:"
+    head -c 500 /tmp/collection.json
