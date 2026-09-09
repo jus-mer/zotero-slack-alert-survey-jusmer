@@ -2,9 +2,20 @@ import os
 import requests
 
 GROUP_ID = os.environ["GROUP_ID"]
-COLLECTION_KEY = os.environ["COLLECTION_KEY"]
+COLLECTION_KEY = (
+    os.getenv("COLLECTION_KEY")
+    or os.getenv("SUBCOLLECTION_KEY")
+    or os.getenv("COLLECTION_ID")
+    or ""
+).strip()
 ZOTERO_API_KEY = os.environ["ZOTERO_API_KEY"]
 SLACK_WEBHOOK = os.environ["SLACK_WEBHOOK"]
+INCLUDE_SUBCOLLECTIONS = os.getenv("INCLUDE_SUBCOLLECTIONS", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 LAST_ITEM_FILE = "last_item.txt"
 
@@ -17,7 +28,7 @@ def get_last_saved():
     try:
         with open(LAST_ITEM_FILE, "r") as f:
             return f.read().strip()
-    except:
+    except OSError:
         return "none"
 
 
@@ -77,47 +88,86 @@ def get_creator_name(meta):
     return "Not available"
 
 
+def fetch_collection_keys(root_collection_key):
+    keys = []
+    queue = [root_collection_key]
+    seen = set()
+
+    while queue:
+        current = queue.pop(0)
+        if current in seen:
+            continue
+
+        seen.add(current)
+        keys.append(current)
+
+        if not INCLUDE_SUBCOLLECTIONS:
+            continue
+
+        url = f"https://api.zotero.org/groups/{GROUP_ID}/collections/{current}/collections"
+        r = requests.get(url, headers=headers, params={"limit": 100, "format": "json"}, timeout=30)
+        if not r.ok:
+            print(f"Warning: failed to list child collections for {current} ({r.status_code}).")
+            continue
+
+        for collection in r.json():
+            key = collection.get("key")
+            if key and key not in seen:
+                queue.append(key)
+
+    return keys
+
+
+def fetch_recent_items():
+    params = {
+        "sort": "dateAdded",
+        "direction": "desc",
+        "limit": 5,
+        "include": "data",
+    }
+
+    if not COLLECTION_KEY:
+        url = f"https://api.zotero.org/groups/{GROUP_ID}/items/top"
+        r = requests.get(url, headers=headers, params=params, timeout=30)
+        r.raise_for_status()
+        return r.json()
+
+    collection_keys = fetch_collection_keys(COLLECTION_KEY)
+    if not collection_keys:
+        return []
+
+    all_items = []
+    for collection_key in collection_keys:
+        url = f"https://api.zotero.org/groups/{GROUP_ID}/collections/{collection_key}/items/top"
+        r = requests.get(url, headers=headers, params=params, timeout=30)
+        if not r.ok:
+            print(f"Warning: failed to read collection {collection_key} ({r.status_code}).")
+            continue
+        all_items.extend(r.json())
+
+    deduped = {}
+    for item in all_items:
+        key = item.get("key")
+        if key:
+            deduped[key] = item
+
+    items = list(deduped.values())
+    items.sort(key=lambda item: item.get("data", {}).get("dateAdded", ""), reverse=True)
+    return items
+
+
 def main():
 
     last_seen = get_last_saved()
 
-    print("Monitoring collection:", COLLECTION_KEY)
+    if COLLECTION_KEY:
+        mode = "including subcollections" if INCLUDE_SUBCOLLECTIONS else "without subcollections"
+        print(f"Collection mode enabled for key '{COLLECTION_KEY}' ({mode}).")
+    else:
+        print("Group-wide mode enabled (all top-level items in the group library).")
 
-    # IMPORTANT:
-    # Use /items, because this endpoint returns the collection
-    # memberships in data.collections.
-    url = f"https://api.zotero.org/groups/{GROUP_ID}/items"
-
-    params = {
-        "sort": "dateAdded",
-        "direction": "desc",
-        "limit": 100,
-        "include": "data"
-    }
-
-    r = requests.get(
-        url,
-        headers=headers,
-        params=params,
-        timeout=30
-    )
-
-    r.raise_for_status()
-
-    all_items = r.json()
-
-    # Keep only top-level items belonging to our collection.
-    items = []
-
-    for item in all_items:
-        data = item.get("data", {})
-
-        collections = data.get("collections") or []
-
-        if COLLECTION_KEY in collections:
-            items.append(item)
-
-    print("Items found in collection:", len(items))
+    items = fetch_recent_items()
+    print("Items found in query:", len(items))
 
     if not items:
         print("No items found.")

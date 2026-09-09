@@ -7,6 +7,11 @@ It assumes that:
 - You have a Zotero account and access to a group/library that you want to monitor. I used this for a group library, but it should work for personal libraries as well.
 - You have a Slack workspace and the necessary permissions to create a webhook for a channel.
 
+Optional behavior:
+
+- You can monitor a specific Zotero collection instead of the full group library.
+- You can include items from that collection's subcollections.
+
 ## Gathering the pieces
 
 To make it work you only need to **copy the repo** (easy via template button) and create a new one in your user or organization you have permission to. BUT ... in case you want to add this to an existing repo, follow the steps at the end.
@@ -19,13 +24,18 @@ First, get this information:
 
 3. A Slack webhook URL to send notifications to a Slack channel: install the "Incoming Webhooks" app in your Slack workspace. Go to [this link](https://datasoc-workspace.slack.com/marketplace/A0F7XDUAZ-incoming-webhooks), select the appropriate workspace (up right), then green button "Add to Slack", and in the configuration the important is to select the slack channel where to get the alerts and copy the URL of the webhook. This is the **`SLACK_WEBHOOK`**.
 
+4. A Zotero collection key to scope the alert to one collection. Use secret **`COLLECTION_KEY`** (preferred). The script also accepts **`SUBCOLLECTION_KEY`** or **`COLLECTION_ID`** as aliases. This must be the alphanumeric key after `/collections/` in the Zotero URL, not the numeric group ID.
+
+5. (Optional) Include subcollections with **`INCLUDE_SUBCOLLECTIONS`**. Use `true` (default), `false`, `1`, `yes`, or `on`.
+
 ## Now the Secrets
 
-Now you just need to set up these three pieces of information as "Github Secrets" in the repository settings. This way, the GitHub Action workflow can access them securely when it runs. For this: 
+Now you just need to set up these pieces of information as "Github Secrets" in the repository settings. This way, the GitHub Action workflow can access them securely when it runs. For this: 
 
 - go to the repository on GitHub, click on "Settings" (top right), then "Secrets and variables" > "Actions" > new repository secret
 - to set up the `GROUP_ID` secret, enter `GROUP_ID` as the name and paste the group/library ID you found in step 1 as the value in the textbox, then click "Add secret"
-- the same for the other two values, so at the end you should have three secrets: `GROUP_ID`, `ZOTERO_API_KEY`, and `SLACK_WEBHOOK`.
+- the same for the other required values, so at the end you should have at least: `GROUP_ID`, `COLLECTION_KEY`, `ZOTERO_API_KEY`, and `SLACK_WEBHOOK`.
+- optional: use `INCLUDE_SUBCOLLECTIONS` with `true` (default) or `false`.
   
 ![](images/secrets.png)
 
