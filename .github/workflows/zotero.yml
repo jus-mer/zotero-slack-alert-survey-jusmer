@@ -1,4 +1,3 @@
-```yaml
 name: Zotero Slack Alert
 
 on:
@@ -55,4 +54,3 @@ jobs:
           git add last_item*.txt
           git commit -m "Update Zotero state" || echo "No changes"
           git push
-```
